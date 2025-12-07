@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::str::FromStr;
 mod config;
 
 #[derive(Parser)]
@@ -20,8 +21,8 @@ enum Commands {
         client_name: String,
         #[arg(short, long)]
         redirect_uri: Option<String>,
-        #[arg(short, long, default_value = "write:statuses")]
-        scopes: String,
+        #[arg(short, long, default_values = ["write:statuses"])]
+        scopes: Vec<String>,
         #[arg(short, long)]
         website: Option<String>,
     },
@@ -75,7 +76,7 @@ async fn main() {
                 &config.instance,
                 &client_name,
                 redirect_uri.as_deref(),
-                Some(&scopes),
+                Some(&scopes.join(" ")),
                 website.as_deref(),
             )
             .await
@@ -132,31 +133,42 @@ async fn register_app(
     client_name: &str,
     redirect_uri: Option<&str>,
     scopes: Option<&str>,
-    _website: Option<&str>,
+    website: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use mastodon_async::Registration;
 
     let mut registration = Registration::new(instance);
     registration.client_name(client_name);
 
-    if let Some(_uri) = redirect_uri {
-        eprintln!("Redirect URI parameter provided but not implemented");
+    if let Some(uri) = redirect_uri {
+        registration.redirect_uris(uri);
     }
 
     if let Some(scope_str) = scopes {
-        eprintln!(
-            "Scope parameter provided but not implemented: {}",
-            scope_str
-        );
+        use mastodon_async::prelude::Scopes;
+        let scopes = Scopes::from_str(scope_str)?;
+        registration.scopes(scopes);
     }
 
-    let _app = registration.build().await?;
+    if let Some(website_url) = website {
+        registration.website(website_url);
+    }
+
+    let app = registration.build().await?;
 
     println!("Application registered successfully!");
-    println!("Save these credentials for authentication:");
-    println!("Registration completed successfully!");
-    println!("The application has been registered with the Mastodon instance.");
-    println!("Check the instance documentation for next steps on authentication.");
+    
+    match app.authorize_url() {
+        Ok(authorize_url) => {
+            println!("\nPlease open this URL in your browser to authorize the application:");
+            println!("{}", authorize_url);
+            println!("\nAfter authorizing, you'll need to use the 'login' command with the client credentials.");
+        }
+        Err(e) => {
+            println!("Error generating authorize URL: {}", e);
+            println!("Use the 'login' command with the client credentials to authenticate.");
+        }
+    }
 
     Ok(())
 }
