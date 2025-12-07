@@ -32,17 +32,20 @@ pub fn load_token(config: &Config) -> Result<mastodon_async::Data, Box<dyn std::
     Ok(data)
 }
 
-pub fn save_token(config: &Config, token_data: &mastodon_async::Data) -> Result<(), Box<dyn std::error::Error>> {
+pub fn save_token(
+    config: &Config,
+    token_data: &mastodon_async::Data,
+) -> Result<(), Box<dyn std::error::Error>> {
     let token_file_path = &config.token_file;
-    
+
     // Create parent directory if it doesn't exist
     if let Some(parent) = std::path::Path::new(token_file_path).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    
+
     let json = serde_json::to_string_pretty(token_data)?;
     std::fs::write(token_file_path, json)?;
-    
+
     println!("Authentication token saved to: {}", token_file_path);
     Ok(())
 }

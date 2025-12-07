@@ -48,7 +48,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Load configuration file (will use default "bot.toml" if not specified)
-    let config = match config::load_config(&cli.config.as_ref().unwrap()) {
+    let config = match config::load_config(cli.config.as_ref().unwrap()) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error loading configuration: {}", e);
