@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::str::FromStr;
 mod config;
+use ical_to_masto::ical::IcalCalendar;
 
 #[derive(Parser)]
 #[command(name = "ical-to-masto")]
@@ -30,6 +31,32 @@ enum Commands {
         scopes: Vec<String>,
         #[arg(short, long)]
         website: Option<String>,
+    },
+    #[command(about = "Post the next meeting from iCal to Mastodon")]
+    PostNextMeeting {
+        #[arg(long)]
+        visibility: Option<String>,
+        #[arg(long)]
+        sensitive: Option<bool>,
+        #[arg(long)]
+        spoiler_text: Option<String>,
+        #[arg(long)]
+        language: Option<String>,
+        #[arg(long)]
+        in_reply_to_id: Option<String>,
+    },
+    #[command(about = "Post all upcoming meetings from iCal to Mastodon")]
+    PostAllUpcomingMeetings {
+        #[arg(long)]
+        visibility: Option<String>,
+        #[arg(long)]
+        sensitive: Option<bool>,
+        #[arg(long)]
+        spoiler_text: Option<String>,
+        #[arg(long)]
+        language: Option<String>,
+        #[arg(long)]
+        in_reply_to_id: Option<String>,
     },
     #[command(about = "Post a status to Mastodon")]
     Post {
@@ -78,6 +105,48 @@ async fn main() {
             .await
             {
                 eprintln!("Error registering app: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::PostNextMeeting {
+            visibility,
+            sensitive,
+            spoiler_text,
+            language,
+            in_reply_to_id,
+        } => {
+            if let Err(e) = post_next_meeting(
+                &config,
+                visibility.as_deref(),
+                sensitive,
+                spoiler_text.as_deref(),
+                language.as_deref(),
+                in_reply_to_id.as_deref(),
+            )
+            .await
+            {
+                eprintln!("Error posting next meeting: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::PostAllUpcomingMeetings {
+            visibility,
+            sensitive,
+            spoiler_text,
+            language,
+            in_reply_to_id,
+        } => {
+            if let Err(e) = post_all_upcoming_meetings(
+                &config,
+                visibility.as_deref(),
+                sensitive,
+                spoiler_text.as_deref(),
+                language.as_deref(),
+                in_reply_to_id.as_deref(),
+            )
+            .await
+            {
+                eprintln!("Error posting all upcoming meetings: {}", e);
                 std::process::exit(1);
             }
         }
@@ -170,9 +239,135 @@ async fn register(
     Ok(())
 }
 
+async fn post_next_meeting(
+    config: &config::Config,
+    _visibility: Option<&str>,
+    _sensitive: Option<bool>,
+    _spoiler_text: Option<&str>,
+    _language: Option<&str>,
+    _in_reply_to_id: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use mastodon_async::{Mastodon, NewStatus};
 
+    let data = config::load_token(config)?;
+    let mastodon = Mastodon::from(data);
 
+    // Load calendar from webcal URL
+    let calendar = IcalCalendar::from_url(&config.webcal).await?;
 
+    // Get current time in iCal format
+    let current_time = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+
+    // Get upcoming events (limit to 1 for next meeting)
+    let upcoming_events = calendar.get_upcoming_events_limited(&current_time, Some(1));
+
+    let status = if let Some(event) = upcoming_events.first() {
+        // Format meeting details
+        let summary = event.summary.as_deref().unwrap_or("Meeting");
+        let location = event.location.as_deref().unwrap_or("Location TBD");
+        let start_time = event.start_time_formatted().unwrap_or("Time TBD".to_string());
+        let event_url = event.url.as_deref();
+        
+        if let Some(url) = event_url {
+            format!(
+                "📅 Next Meeting: {}\n📍 {}\n🕒 {}\n🔗 {}",
+                summary, location, start_time, url
+            )
+        } else {
+            format!(
+                "📅 Next Meeting: {}\n📍 {}\n🕒 {}",
+                summary, location, start_time
+            )
+        }
+    } else {
+        "📅 No upcoming meetings found".to_string()
+    };
+
+    let new_status = NewStatus {
+        status: Some(status),
+        ..Default::default()
+    };
+
+    let posted_status = mastodon.new_status(new_status).await?;
+
+    println!("Next meeting posted successfully!");
+    println!("ID: {}", posted_status.id);
+    if let Some(url) = posted_status.url {
+        println!("URL: {}", url);
+    }
+
+    Ok(())
+}
+
+async fn post_all_upcoming_meetings(
+    config: &config::Config,
+    _visibility: Option<&str>,
+    _sensitive: Option<bool>,
+    _spoiler_text: Option<&str>,
+    _language: Option<&str>,
+    _in_reply_to_id: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use mastodon_async::{Mastodon, NewStatus};
+
+    let data = config::load_token(config)?;
+    let mastodon = Mastodon::from(data);
+
+    // Load calendar from webcal URL
+    let calendar = IcalCalendar::from_url(&config.webcal).await?;
+    
+    // Get current time in iCal format
+    let current_time = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    
+    // Get all upcoming events (no limit)
+    let upcoming_events = calendar.get_upcoming_events(&current_time);
+    
+    let status = if upcoming_events.is_empty() {
+        "📅 No upcoming meetings found".to_string()
+    } else {
+        let mut meeting_list = String::new();
+        
+        for (i, event) in upcoming_events.iter().enumerate() {
+            // Format meeting details
+            let summary = event.summary.as_deref().unwrap_or("Meeting");
+            let location = event.location.as_deref().unwrap_or("Location TBD");
+            let start_time = event
+                .start_time_formatted()
+                .unwrap_or("Time TBD".to_string());
+            
+            if i > 0 {
+                meeting_list.push_str("\n\n");
+            }
+            
+            let event_url = event.url.as_deref();
+            let meeting_line = if let Some(url) = event_url {
+                format!("📅 {}. 📍 {} 🕒 {} 🔗 {}", 
+                    summary, location, start_time, url)
+            } else {
+                format!("📅 {}. 📍 {} 🕒 {}", 
+                    summary, location, start_time)
+            };
+            
+            meeting_list.push_str(&meeting_line);
+        }
+        
+        format!("📅 Upcoming Meetings ({}):\n{}", 
+            upcoming_events.len(), meeting_list)
+    };
+    
+    let new_status = NewStatus {
+        status: Some(status),
+        ..Default::default()
+    };
+
+    let posted_status = mastodon.new_status(new_status).await?;
+    
+    println!("Posted upcoming meetings status: {}", posted_status.id);
+    if let Some(url) = posted_status.url {
+        println!("URL: {}", url);
+    }
+
+    Ok(())
+}
 
 async fn post_status(
     config: &config::Config,

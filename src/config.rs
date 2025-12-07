@@ -5,6 +5,7 @@ pub struct Config {
     pub instance: String,
     #[serde(default = "default_token_file")]
     pub token_file: String,
+    pub webcal: String,
 }
 
 fn default_token_file() -> String {
