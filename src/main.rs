@@ -1,9 +1,13 @@
 use clap::{Parser, Subcommand};
+mod config;
 
 #[derive(Parser)]
 #[command(name = "ical-to-masto")]
 #[command(about = "A tool to sync iCal events to Mastodon")]
 struct Cli {
+    #[arg(short = 'c', long, help = "Path to TOML configuration file", default_value = "bot.toml")]
+    config: Option<String>,
+    
     #[command(subcommand)]
     command: Commands,
 }
@@ -12,21 +16,17 @@ struct Cli {
 enum Commands {
     #[command(about = "Register an application with a Mastodon instance")]
     RegisterApp {
-        #[arg(short, long)]
-        instance: String,
         #[arg(short, long, default_value = "ical-to-masto")]
         client_name: String,
         #[arg(short, long)]
         redirect_uri: Option<String>,
-        #[arg(short, long)]
-        scopes: Option<String>,
+        #[arg(short, long, default_value = "write:statuses")]
+        scopes: String,
         #[arg(short, long)]
         website: Option<String>,
     },
     #[command(about = "Authenticate with a Mastodon instance")]
     Login {
-        #[arg(short, long)]
-        instance: String,
         #[arg(long)]
         client_id: String,
         #[arg(long)]
@@ -54,20 +54,28 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    
+    // Load configuration file (will use default "bot.toml" if not specified)
+    let config = match config::load_config(&cli.config.as_ref().unwrap()) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error loading configuration: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     match cli.command {
         Commands::RegisterApp {
-            instance,
             client_name,
             redirect_uri,
             scopes,
             website,
         } => {
             if let Err(e) = register_app(
-                &instance,
+                &config.instance,
                 &client_name,
                 redirect_uri.as_deref(),
-                scopes.as_deref(),
+                Some(&scopes),
                 website.as_deref(),
             )
             .await
@@ -77,13 +85,12 @@ async fn main() {
             }
         }
         Commands::Login {
-            instance,
             client_id,
             client_secret,
             redirect_uri,
         } => {
             if let Err(e) = login(
-                &instance,
+                &config,
                 &client_id,
                 &client_secret,
                 redirect_uri.as_deref(),
@@ -103,6 +110,7 @@ async fn main() {
             in_reply_to_id,
         } => {
             if let Err(e) = post_status(
+                &config,
                 &status,
                 visibility.as_deref(),
                 sensitive,
@@ -154,7 +162,7 @@ async fn register_app(
 }
 
 async fn login(
-    instance: &str,
+    config: &config::Config,
     client_id: &str,
     client_secret: &str,
     redirect_uri: Option<&str>,
@@ -167,7 +175,7 @@ async fn login(
     println!("Please open this URL in your browser to authorize the application:");
     println!(
         "{}?client_id={}&response_type=code&redirect_uri={}&scope=read",
-        format!("{}/oauth/authorize", instance),
+        format!("{}/oauth/authorize", config.instance),
         client_id,
         redirect
     );
@@ -188,7 +196,7 @@ async fn login(
     ];
 
     let response = client
-        .post(&format!("{}/oauth/token", instance))
+        .post(&format!("{}/oauth/token", config.instance))
         .form(&params)
         .send()
         .await?;
@@ -205,46 +213,24 @@ async fn login(
 
     // Save the token to a file for future use
     let token_data = Data {
-        base: Cow::Owned(instance.to_string()),
+        base: Cow::Owned(config.instance.to_string()),
         client_id: Cow::Owned(client_id.to_string()),
         client_secret: Cow::Owned(client_secret.to_string()),
         token: Cow::Owned(access_token),
         ..Default::default()
     };
 
-    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
-    let config_dir = home_dir.join(".config").join("ical-to-masto");
-    std::fs::create_dir_all(&config_dir)?;
-
-    let token_file = config_dir.join("token.json");
-    let json = serde_json::to_string_pretty(&token_data)?;
-    std::fs::write(token_file, json)?;
-
-    println!(
-        "Authentication token saved to {}",
-        config_dir.join("token.json").display()
-    );
+    config::save_token(config, &token_data)?;
 
     Ok(())
 }
 
-fn load_token() -> Result<mastodon_async::Data, Box<dyn std::error::Error>> {
-    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
-    let token_file = home_dir
-        .join(".config")
-        .join("ical-to-masto")
-        .join("token.json");
 
-    if !token_file.exists() {
-        return Err("No authentication token found. Please run 'login' command first.".into());
-    }
 
-    let content = std::fs::read_to_string(token_file)?;
-    let data: mastodon_async::Data = serde_json::from_str(&content)?;
-    Ok(data)
-}
+
 
 async fn post_status(
+    config: &config::Config,
     status: &str,
     _visibility: Option<&str>,
     _sensitive: Option<bool>,
@@ -254,7 +240,7 @@ async fn post_status(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use mastodon_async::{Mastodon, NewStatus};
 
-    let data = load_token()?;
+    let data = config::load_token(config)?;
     let mastodon = Mastodon::from(data);
 
     let new_status = NewStatus {
