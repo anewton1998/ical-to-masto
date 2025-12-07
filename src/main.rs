@@ -33,7 +33,7 @@ enum Commands {
         website: Option<String>,
     },
     #[command(about = "Post the next meeting from iCal to Mastodon")]
-    PostNextMeeting {
+    PostNext {
         #[arg(long)]
         visibility: Option<String>,
         #[arg(long)]
@@ -46,7 +46,7 @@ enum Commands {
         in_reply_to_id: Option<String>,
     },
     #[command(about = "Post all upcoming meetings from iCal to Mastodon")]
-    PostAllUpcomingMeetings {
+    PostAll {
         #[arg(long)]
         visibility: Option<String>,
         #[arg(long)]
@@ -59,7 +59,7 @@ enum Commands {
         in_reply_to_id: Option<String>,
     },
     #[command(about = "Post a status to Mastodon")]
-    Post {
+    PostStatus {
         #[arg(short, long)]
         status: String,
         #[arg(long)]
@@ -108,7 +108,7 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::PostNextMeeting {
+        Commands::PostNext {
             visibility,
             sensitive,
             spoiler_text,
@@ -129,7 +129,7 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::PostAllUpcomingMeetings {
+        Commands::PostAll {
             visibility,
             sensitive,
             spoiler_text,
@@ -150,7 +150,7 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Post {
+        Commands::PostStatus {
             status,
             visibility,
             sensitive,
