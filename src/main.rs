@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use mastodon_async::helpers::cli;
 use std::str::FromStr;
 mod config;
 
@@ -6,9 +7,14 @@ mod config;
 #[command(name = "ical-to-masto")]
 #[command(about = "A tool to sync iCal events to Mastodon")]
 struct Cli {
-    #[arg(short = 'c', long, help = "Path to TOML configuration file", default_value = "bot.toml")]
+    #[arg(
+        short = 'c',
+        long,
+        help = "Path to TOML configuration file",
+        default_value = "bot.toml"
+    )]
     config: Option<String>,
-    
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -35,6 +41,11 @@ enum Commands {
         #[arg(short, long)]
         redirect_uri: Option<String>,
     },
+    #[command(about = "Set authentication token directly")]
+    SetToken {
+        #[arg(help = "Authentication token to set")]
+        token: String,
+    },
     #[command(about = "Post a status to Mastodon")]
     Post {
         #[arg(short, long)]
@@ -55,7 +66,7 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    
+
     // Load configuration file (will use default "bot.toml" if not specified)
     let config = match config::load_config(&cli.config.as_ref().unwrap()) {
         Ok(config) => config,
@@ -73,7 +84,7 @@ async fn main() {
             website,
         } => {
             if let Err(e) = register_app(
-                &config.instance,
+                &config,
                 &client_name,
                 redirect_uri.as_deref(),
                 Some(&scopes.join(" ")),
@@ -90,15 +101,16 @@ async fn main() {
             client_secret,
             redirect_uri,
         } => {
-            if let Err(e) = login(
-                &config,
-                &client_id,
-                &client_secret,
-                redirect_uri.as_deref(),
-            )
-            .await
+            if let Err(e) =
+                login(&config, &client_id, &client_secret, redirect_uri.as_deref()).await
             {
                 eprintln!("Error during login: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::SetToken { token } => {
+            if let Err(e) = set_token(&config, &token) {
+                eprintln!("Error setting token: {}", e);
                 std::process::exit(1);
             }
         }
@@ -129,7 +141,7 @@ async fn main() {
 }
 
 async fn register_app(
-    instance: &str,
+    config: &config::Config,
     client_name: &str,
     redirect_uri: Option<&str>,
     scopes: Option<&str>,
@@ -137,7 +149,7 @@ async fn register_app(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use mastodon_async::Registration;
 
-    let mut registration = Registration::new(instance);
+    let mut registration = Registration::new(&config.instance);
     registration.client_name(client_name);
 
     if let Some(uri) = redirect_uri {
@@ -157,12 +169,30 @@ async fn register_app(
     let app = registration.build().await?;
 
     println!("Application registered successfully!");
-    
+
     match app.authorize_url() {
         Ok(authorize_url) => {
             println!("\nPlease open this URL in your browser to authorize the application:");
             println!("{}", authorize_url);
-            println!("\nAfter authorizing, you'll need to use the 'login' command with the client credentials.");
+
+            println!("\nAfter authorizing, paste the authorization code here:");
+            let mut code = String::new();
+            std::io::stdin().read_line(&mut code)?;
+            let code = code.trim();
+
+            match app.complete(code).await {
+                Ok(mastodon) => {
+                    println!("Authentication successful!");
+
+                    // Save the authenticated data
+                    let token_data = mastodon.data.clone();
+                    config::save_token(config, &token_data)?;
+                }
+                Err(e) => {
+                    println!("Error completing authentication: {}", e);
+                    println!("You may need to use the 'login' command with client credentials.");
+                }
+            }
         }
         Err(e) => {
             println!("Error generating authorize URL: {}", e);
@@ -170,6 +200,22 @@ async fn register_app(
         }
     }
 
+    Ok(())
+}
+
+fn set_token(config: &config::Config, token: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::borrow::Cow;
+
+    let token_data = mastodon_async::Data {
+        base: Cow::Owned(config.instance.clone()),
+        client_id: Cow::Owned("".to_string()), // Empty since we're setting token directly
+        client_secret: Cow::Owned("".to_string()), // Empty since we're setting token directly
+        token: Cow::Owned(token.to_string()),
+        ..Default::default()
+    };
+
+    config::save_token(config, &token_data)?;
+    println!("Authentication token saved successfully!");
     Ok(())
 }
 
@@ -236,10 +282,6 @@ async fn login(
 
     Ok(())
 }
-
-
-
-
 
 async fn post_status(
     config: &config::Config,
