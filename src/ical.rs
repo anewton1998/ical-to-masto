@@ -12,6 +12,16 @@ pub struct CalendarEvent {
     pub url: Option<String>,
 }
 
+impl CalendarEvent {
+    pub fn end_time_formatted(&self) -> Option<String> {
+        self.end_time.as_ref().map(|t| format_ical_date(t))
+    }
+
+    pub fn start_time_formatted(&self) -> Option<String> {
+        self.start_time.as_ref().map(|t| format_ical_date(t))
+    }
+}
+
 pub struct IcalCalendar {
     pub events: Vec<CalendarEvent>,
 }
@@ -146,6 +156,19 @@ impl IcalCalendar {
         }
 
         upcoming_events
+    }
+}
+
+fn format_ical_date(ical_date: &str) -> String {
+    match chrono::DateTime::parse_from_str(ical_date, "%Y%m%dT%H%M%SZ") {
+        Ok(dt) => dt.format("%a, %b %d, %Y at %I:%M %p").to_string(),
+        Err(_) => {
+            // Try parsing without timezone
+            match chrono::NaiveDateTime::parse_from_str(ical_date, "%Y%m%dT%H%M%S") {
+                Ok(dt) => dt.format("%a, %b %d, %Y at %I:%M %p").to_string(),
+                Err(_) => ical_date.to_string(), // Return original if parsing fails
+            }
+        }
     }
 }
 
